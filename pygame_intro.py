@@ -8,8 +8,8 @@ import time
 import random
 
 #starting speeds
-enemy_speed = 10
-background_speed = 5
+enemy_speed = 7
+background_speed = 3
 
 #initializes pygame
 pygame.init()
