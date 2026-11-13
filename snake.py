@@ -53,7 +53,7 @@ fish_images = {
     3 : pygame.image.load('Images/fish/fish_3.png').convert_alpha()
 }
 current_angle = 0
-angle_string = 'Right'
+current_direction = pygame.K_d
 first_movement = False
 current_time = 0
 update_position = False
@@ -114,10 +114,33 @@ while True:
     else:
         shark_rectangle.center = shark_start.lerp(shark_target, (current_time / 250))
     screen.blit(shark, shark_rectangle)
+    #tail
     if fish_eaten:
         for direction in movement_dictionary:
-            if movement_dictionary[direction][1] == current_angle:
-                angle_string = movement_dictionary[direction][3]
+            if current_angle == movement_dictionary[direction][1]:
+                current_direction = direction
+                break
+        if len(shark_tail) == 0:
+            new_position_x = (shark_coordinates[0] - movement_dictionary[current_direction][0][0])
+            new_position_y = (shark_coordinates[1] - movement_dictionary[current_direction][0][1])
+            tail_direction = current_direction
+        else:
+            tail_append = (len(shark_tail) - 1)
+            old_coordinate = shark_tail[tail_append]
+            new_position_x = (old_coordinate[0] - movement_dictionary[old_coordinate[2]][0][0])
+            new_position_y = (old_coordinate[1] - movement_dictionary[old_coordinate[2]][0][1])
+            tail_direction = current_direction
+        shark_tail.append([new_position_x, new_position_y, tail_direction])
+        fish_eaten = False
+    #moves the tail
+    if len(shark_tail) > 0:
+        for tail_number in range(len(shark_tail)):
+            shark_tail[tail_number][0] += movement_dictionary[movement_direction][0][0]
+            shark_tail[tail_number][1] += movement_dictionary[movement_direction][0][1]
+        #draws the tail
+        for tail_number in range(len(shark_tail)):
+            tail_rectangle = fish.get_rect(center = (((shark_tail[tail_number][0] * 65) - 20), ((shark_tail[tail_number][1] * 65) - 20)))
+            screen.blit(fish, fish_rectangle)
 
     #fish
     if fish_spawned:
