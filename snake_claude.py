@@ -6,8 +6,11 @@
 #   * The shark (the snake's head) moves one square every 250 milliseconds.
 #   * When the shark lands on the fish, the fish joins the tail and a new
 #     fish appears somewhere else.
+#   * The tail glides along behind the shark and each fish wiggles a bit.
 #   * If the shark hits a wall or its own tail, the game is over.
-#   * Press R after the game is over to play again.
+#   * If you collect enough fish you win, and the tail vanishes one fish
+#     at a time, from the very back up to the shark.
+#   * Press R after the game has ended to play again.
 #
 # Controls: W = up, A = left, S = down, D = right, R = restart
 #
@@ -21,8 +24,11 @@
 import pygame
 from sys import exit            # lets us close the program cleanly
 from random import randint, choice
-# randint(1, 3) gives a random whole number from 1 to 3.
+# randint(0, 2) gives a random whole number from 0 to 2.
 # choice(some_list) picks one random item out of a list.
+from math import sin
+# sin() is a maths function that smoothly goes up and down between -1 and 1
+# as you feed it a growing number. It's perfect for wiggling things.
 
 
 # ---------------------------------------------------------------------
@@ -38,6 +44,14 @@ PIXEL_OFFSET = 20       # fudge number that lines the sprites up with the backgr
 GRID_SIZE = 12          # the playable board is 12 x 12 squares
 MOVE_DELAY = 250        # milliseconds between each step of the shark
 WIN_LENGTH = 130        # how many tail fish you need to win
+
+# Win animation: one tail fish disappears every 30 milliseconds.
+WIN_ERASE_DELAY = 30
+
+# Tail wiggle settings. Try changing these numbers to see what happens!
+WOBBLE_SPEED = 8        # how fast the tail fish wiggle
+WOBBLE_AMOUNT = 15      # how many degrees they wiggle left and right
+WOBBLE_SPREAD = 0.7     # how out-of-sync neighbouring fish are (this makes a wave)
 
 # These two numbers are the "scale" for the sprites. 0.5 means "half
 # the size of the image file", 0.04 means "4% of the size".
@@ -57,9 +71,11 @@ pygame.display.set_caption('Snake')                     # text in the window's t
 big_font = pygame.font.Font(None, 90)
 small_font = pygame.font.Font(None, 45)
 
-# A custom event. Every 250ms pygame will drop this event into the event
-# queue, and that is our signal to move the shark one square.
+# Custom events. Pygame can drop these into the event queue on a timer.
+# MOVE_EVENT arrives every 250ms while playing: time to move the shark.
+# WIN_EVENT arrives every 30ms during the win animation: time to remove a tail fish.
 MOVE_EVENT = pygame.event.custom_type()
+WIN_EVENT = pygame.event.custom_type()
 
 
 # ---------------------------------------------------------------------
@@ -150,15 +166,18 @@ def reset_game():
     # Normally, a variable made inside a function disappears when the function
     # ends. The word "global" says: "I want to change the variables that live
     # outside this function, not make new private ones."
-    global head_cell, tail_cells, tail_fish_numbers
+    global head_cell, tail_cells, previous_tail_cells, tail_fish_numbers
     global direction, next_direction
-    global state, game_over_message
+    global state, game_over_message, score
     global fish_cell, fish_number
     global previous_head_pixel, last_move_time
 
     head_cell = (1, 1)            # the shark starts in the top-left square
     tail_cells = []               # grid positions of each tail fish (empty at first)
+    previous_tail_cells = []      # where each tail fish was BEFORE the latest step
+                                  # (we need this to slide the fish smoothly)
     tail_fish_numbers = []        # which fish picture each tail segment uses
+    score = 0                     # how many fish have been eaten
 
     direction = pygame.K_d        # the direction the shark last moved in
     next_direction = pygame.K_d   # the direction the player wants to go next
@@ -167,15 +186,17 @@ def reset_game():
     #   "waiting"   - before the first key press, nothing moves yet
     #   "playing"   - the game is running
     #   "game_over" - you lost, waiting for R
-    #   "won"       - you won, waiting for R
+    #   "winning"   - you just won and the tail is vanishing (the win animation)
+    #   "won"       - the win animation is finished, waiting for R
     state = "waiting"
     game_over_message = ""
 
     previous_head_pixel = cell_to_pixel(head_cell)   # used for smooth movement (see below)
     last_move_time = 0                               # when the shark last stepped
 
-    # Stop the movement timer. Setting a timer to 0 turns it off.
+    # Stop both timers. Setting a timer to 0 turns it off.
     pygame.time.set_timer(MOVE_EVENT, 0)
+    pygame.time.set_timer(WIN_EVENT, 0)
 
     # Place the first fish.
     fish_cell, fish_number = spawn_fish()
@@ -273,9 +294,10 @@ while True:
 
             # --- Otherwise it's a safe move, so do it. ---
             else:
-                # Remember where the head WAS, so we can slide smoothly
-                # from the old square to the new one when drawing.
+                # Remember where everything WAS, so we can slide smoothly
+                # from the old squares to the new ones when drawing.
                 previous_head_pixel = cell_to_pixel(head_cell)
+                previous_tail_cells = tail_cells.copy()   # .copy() makes a separate copy of the list
                 last_move_time = pygame.time.get_ticks()
 
                 # The tail follows the head. The trick: put the head's old
@@ -289,11 +311,18 @@ while True:
                     # added, so the tail is now one longer. We also remember
                     # which fish picture it should use.
                     tail_fish_numbers.append(fish_number)
+                    score += 1
+
+                    # The new fish at the back of the tail has nowhere to
+                    # slide from, so it just starts out in its final square.
+                    previous_tail_cells.append(tail_cells[-1])   # [-1] means "the last item"
 
                     if len(tail_cells) >= WIN_LENGTH:
-                        state = "won"
+                        # You win! Start the win animation.
+                        state = "winning"
                         game_over_message = "You win!"
-                        pygame.time.set_timer(MOVE_EVENT, 0)
+                        pygame.time.set_timer(MOVE_EVENT, 0)                 # shark stops
+                        pygame.time.set_timer(WIN_EVENT, WIN_ERASE_DELAY)    # start removing fish
                     else:
                         fish_cell, fish_number = spawn_fish()
                 else:
@@ -302,52 +331,86 @@ while True:
                     # removing one from the back makes the tail "slide" along.
                     tail_cells.pop()
 
+        # WIN ANIMATION: every 30ms, remove the last fish of the tail.
+        # Because the back of the tail is the END of the list, the fish
+        # vanish from the back all the way up to the shark.
+        if event.type == WIN_EVENT and state == "winning":
+            if len(tail_cells) > 0:
+                tail_cells.pop()
+                previous_tail_cells.pop()      # keep the lists the same length
+                tail_fish_numbers.pop()
+            if len(tail_cells) == 0:
+                # The whole tail is gone. The animation is finished.
+                state = "won"
+                pygame.time.set_timer(WIN_EVENT, 0)
+
     # -----------------------------------------------------------------
     # (b) DRAWING
     # -----------------------------------------------------------------
     # Things drawn later appear on top of things drawn earlier, so the
-    # order here matters: background first, shark last.
+    # order here matters: background first, then fish, then tail, and
+    # the shark LAST so it is always in front of its tail.
 
     frame_counter += 1
 
-    # Background
-    screen.blit(background, (0, 0))      # blit = "paste this picture at this position"
+    # Some numbers we need for the tail AND the shark, so we work them out first.
 
-    # The fish (hidden once you've won, since the board is basically full)
-    if state != "won":
-        fish_rectangle = fish_images[fish_number].get_rect(center=cell_to_pixel(fish_cell))
-        screen.blit(fish_images[fish_number], fish_rectangle)
-
-    # The tail. range(len(tail_cells)) gives 0, 1, 2, ... up to the tail length.
-    for index in range(len(tail_cells)):
-        tail_image = fish_images[tail_fish_numbers[index]]
-        tail_rectangle = tail_image.get_rect(center=cell_to_pixel(tail_cells[index]))
-        screen.blit(tail_image, tail_rectangle)
-
-    # The shark.
-    # 1) How far through the current step are we? 0 means "just started" and
-    #    1 means "arrived". We divide the time since the last step by the
-    #    step length, and cap it at 1 so it never overshoots.
+    # How far through the current step are we? 0 means "just started" and
+    # 1 means "arrived". We divide the time since the last step by the
+    # step length, and cap it at 1 so it never overshoots.
     time_since_move = pygame.time.get_ticks() - last_move_time
     progress = time_since_move / MOVE_DELAY
     if progress > 1:
         progress = 1
 
-    # 2) lerp ("linear interpolation") finds the point part of the way between
+    # Time in seconds since the program started. Used for the tail wiggle.
+    seconds = pygame.time.get_ticks() / 1000
+
+    # Background
+    screen.blit(background, (0, 0))      # blit = "paste this picture at this position"
+
+    # The fish on the board (hidden while you're winning, since you've won)
+    if state not in ("winning", "won"):
+        fish_rectangle = fish_images[fish_number].get_rect(center=cell_to_pixel(fish_cell))
+        screen.blit(fish_images[fish_number], fish_rectangle)
+
+    # The tail. range(len(tail_cells)) gives 0, 1, 2, ... up to the tail length.
+    for index in range(len(tail_cells)):
+
+        # 1) Glide: each fish slides from the square it was in to the square
+        #    it is moving to, using the same `progress` as the shark. So the
+        #    tail stays one square behind the shark instead of jumping onto it.
+        start_pixel = cell_to_pixel(previous_tail_cells[index])
+        end_pixel = cell_to_pixel(tail_cells[index])
+        tail_pixel = start_pixel.lerp(end_pixel, progress)
+
+        # 2) Wiggle: sin() swings between -1 and 1 as `seconds` grows, so
+        #    multiplying by WOBBLE_AMOUNT gives an angle that swings left and
+        #    right. Adding `index * WOBBLE_SPREAD` gives every fish a different
+        #    starting point in the swing, which makes a wave run down the tail.
+        wobble_angle = sin(seconds * WOBBLE_SPEED + index * WOBBLE_SPREAD) * WOBBLE_AMOUNT
+
+        # 3) Rotate this fish's picture by that angle and draw it.
+        tail_image = pygame.transform.rotate(fish_images[tail_fish_numbers[index]], wobble_angle)
+        tail_rectangle = tail_image.get_rect(center=tail_pixel)
+        screen.blit(tail_image, tail_rectangle)
+
+    # The shark.
+    # 1) lerp ("linear interpolation") finds the point part of the way between
     #    two points. progress 0 = the old square, 0.5 = halfway, 1 = the new square.
     #    This is what makes the shark glide instead of jumping.
     head_pixel = previous_head_pixel.lerp(cell_to_pixel(head_cell), progress)
 
-    # 3) Pick which swimming picture to show. frame_counter // 10 changes
+    # 2) Pick which swimming picture to show. frame_counter // 10 changes
     #    every 10 frames (// means "divide and drop the decimal"), and % 6 makes
     #    it wrap back to 0 after 5, so we cycle through ANIMATION_ORDER forever.
     animation_step = (frame_counter // 10) % len(ANIMATION_ORDER)
     shark_image = shark_frames[ANIMATION_ORDER[animation_step]]
 
-    # 4) Turn the picture to face the way we're swimming.
+    # 3) Turn the picture to face the way we're swimming.
     shark_image = pygame.transform.rotate(shark_image, DIRECTIONS[direction]["angle"])
 
-    # 5) Rotating changes the picture's size, so we make a fresh rectangle
+    # 4) Rotating changes the picture's size, so we make a fresh rectangle
     #    centered on the shark's position and draw it there.
     shark_rectangle = shark_image.get_rect(center=head_pixel)
     screen.blit(shark_image, shark_rectangle)
@@ -356,7 +419,7 @@ while True:
     if state in ("game_over", "won"):
         screen.blit(dark_overlay, (0, 0))
         draw_centered_text(game_over_message, big_font, WINDOW_SIZE // 2 - 50)
-        draw_centered_text(f"Fish eaten: {len(tail_cells)}", small_font, WINDOW_SIZE // 2 + 20)
+        draw_centered_text(f"Fish eaten: {score}", small_font, WINDOW_SIZE // 2 + 20)
         draw_centered_text("Press R to play again", small_font, WINDOW_SIZE // 2 + 70)
 
     # -----------------------------------------------------------------
