@@ -170,7 +170,7 @@ while True:
         shark_path.pop(0)
 
     #edge of map detection
-    if shark_coordinates[0] > 12 or shark_coordinates[1] > 12 or shark_coordinates[0] < 0 or shark_coordinates[1] < 0:
+    if shark_coordinates[0] > 12 or shark_coordinates[1] > 12 or shark_coordinates[0] == 0 or shark_coordinates[1] == 0:
         print("You hit the wall!")
         pygame.quit()
         exit()
